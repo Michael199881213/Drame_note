@@ -164,6 +164,8 @@ export default function App() {
   const [totalEpisodes, setTotalEpisodes] = useState<number | "">("");
   const [note, setNote] = useState("");
   const [errorMsg, setErrorMsg] = useState("");
+  const [tempCompImage, setTempCompImage] = useState<string>("");
+  const [imageInputKey, setImageInputKey] = useState(Date.now());
 
   // UI state filters
   const [statusFilter, setStatusFilter] = useState<"all" | "ongoing" | "completed">("all");
@@ -175,11 +177,108 @@ export default function App() {
   const [editTitle, setEditTitle] = useState("");
   const [editTotal, setEditTotal] = useState<number>(1);
   const [editNote, setEditNote] = useState("");
+  const [editImage, setEditImage] = useState<string>("");
+
+  // Custom LEGO modal confirmation dialog state
+  const [confirmModal, setConfirmModal] = useState<{
+    isOpen: boolean;
+    title: string;
+    description: string;
+    actionType: "delete" | "reset-seed" | "clear-all";
+    targetId?: string;
+  }>({
+    isOpen: false,
+    title: "",
+    description: "",
+    actionType: "delete",
+  });
+
+  const handleConfirmModalAction = () => {
+    if (confirmModal.actionType === "delete" && confirmModal.targetId) {
+      setDramas(prev => prev.filter(d => d.id !== confirmModal.targetId));
+    } else if (confirmModal.actionType === "reset-seed") {
+      setDramas(INITIAL_SEED_DATA);
+    } else if (confirmModal.actionType === "clear-all") {
+      setDramas([]);
+    }
+    setConfirmModal(prev => ({ ...prev, isOpen: false }));
+  };
+
+  const triggerResetToSeed = () => {
+    setConfirmModal({
+      isOpen: true,
+      title: "重新配置積木基地？",
+      description: "這將會把所有目前的追劇進度紀錄打掉，並重新載入原廠的 3 組 LEGO 樂高示範積木資料盤。原紀錄將會被覆蓋！",
+      actionType: "reset-seed"
+    });
+  };
 
   // Stats
   const totalDramasCount = dramas.length;
   const completedCount = dramas.filter(d => d.currentEpisode === d.totalEpisodes).length;
   const ongoingCount = totalDramasCount - completedCount;
+
+  // Compress image helper using Canvas API (strictly down to max-width 300px, 0.6 quality)
+  const compressImage = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.readAsDataURL(file);
+      reader.onload = (event) => {
+        const src = event.target?.result as string;
+        const img = new Image();
+        img.src = src;
+        img.onload = () => {
+          const canvas = document.createElement("canvas");
+          const ctx = canvas.getContext("2d");
+          if (!ctx) {
+            resolve(src); // fallback
+            return;
+          }
+
+          const MAX_WIDTH = 300;
+          let width = img.width;
+          let height = img.height;
+
+          if (width > MAX_WIDTH) {
+            height = Math.round((height * MAX_WIDTH) / width);
+            width = MAX_WIDTH;
+          }
+
+          canvas.width = width;
+          canvas.height = height;
+          ctx.drawImage(img, 0, 0, width, height);
+
+          // Compress to lightweight JPEG Base64
+          const compressed = canvas.toDataURL("image/jpeg", 0.6);
+          resolve(compressed);
+        };
+        img.onerror = (err) => {
+          reject(err);
+        };
+      };
+      reader.onerror = (err) => {
+        reject(err);
+      };
+    });
+  };
+
+  const handleImageChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const base64Str = await compressImage(file);
+      setTempCompImage(base64Str);
+      setErrorMsg("");
+    } catch (err) {
+      console.error("Image compression error:", err);
+      setErrorMsg("圖片載入或壓縮失敗！");
+    }
+  };
+
+  const clearSelectedImage = () => {
+    setTempCompImage("");
+    setImageInputKey(Date.now());
+  };
 
   // Add a new drama
   const handleAddDrama = (e: React.FormEvent) => {
@@ -201,13 +300,16 @@ export default function App() {
       totalEpisodes: episodes,
       currentEpisode: 0,
       updatedAt: new Date().toISOString(),
-      note: note.trim() || undefined
+      note: note.trim() || undefined,
+      imageUrl: tempCompImage || undefined
     };
 
     setDramas(prev => [newDrama, ...prev]);
     setTitle("");
     setTotalEpisodes("");
     setNote("");
+    setTempCompImage("");
+    setImageInputKey(Date.now());
     setErrorMsg("");
   };
 
@@ -287,6 +389,7 @@ export default function App() {
     setEditTitle(drama.title);
     setEditTotal(drama.totalEpisodes);
     setEditNote(drama.note || "");
+    setEditImage(drama.imageUrl || "");
   };
 
   // Save edit changes
@@ -304,6 +407,7 @@ export default function App() {
             totalEpisodes: editTotal,
             currentEpisode: current,
             note: editNote.trim() || undefined,
+            imageUrl: editImage ? editImage : undefined,
             updatedAt: new Date().toISOString()
           };
         }
@@ -320,9 +424,12 @@ export default function App() {
 
   // Seed baseline reset
   const resetToSeed = () => {
-    if (window.confirm("確定要重設為預設範例資料嗎？（這將會覆蓋您目前的追劇紀錄）")) {
-      setDramas(INITIAL_SEED_DATA);
-    }
+    setConfirmModal({
+      isOpen: true,
+      title: "重新配置積木基地？",
+      description: "這將會把所有目前的追劇進度紀錄打掉，並重新載入原廠的 3 組 LEGO 樂高示範積木資料盤。原紀錄將會被覆蓋！",
+      actionType: "reset-seed"
+    });
   };
 
   // Filter and sort items
@@ -555,6 +662,56 @@ export default function App() {
                   />
                 </div>
 
+                <div>
+                  <label htmlFor="input-image" className="block text-xs font-black text-black uppercase tracking-wider mb-2 ml-1">
+                    劇照 / 封面圖片（選填，選取後會自動高壓縮儲存）
+                  </label>
+                  <div className="relative">
+                    <input
+                      type="file"
+                      id="input-image"
+                      accept="image/*"
+                      key={imageInputKey}
+                      onChange={handleImageChange}
+                      className="hidden"
+                    />
+                    <label
+                      htmlFor="input-image"
+                      className="w-full bg-white border-2 border-dashed border-black rounded-xl px-4 py-4 flex flex-col items-center justify-center gap-2 text-slate-850 text-sm font-bold shadow-[2px_2px_0px_#000000] hover:bg-slate-50 cursor-pointer text-center group transition-colors"
+                    >
+                      {tempCompImage ? (
+                        <div className="relative w-full flex flex-col items-center p-1">
+                          <img
+                            src={tempCompImage}
+                            alt="Preview"
+                            className="h-28 w-auto object-cover rounded-lg border-2 border-black shadow-[2px_2px_0px_#000000] mb-2"
+                          />
+                          <span className="text-xs text-emerald-700 font-black flex items-center gap-1">
+                            <span>✅ 劇照壓縮完畢 (已等比寬300px)</span>
+                          </span>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              clearSelectedImage();
+                            }}
+                            className="mt-2 text-[10px] bg-red-400 hover:bg-red-500 text-black border-2 border-black px-2.5 py-1 rounded shadow-[1.5px_1.5px_0_#000000] font-black cursor-pointer"
+                          >
+                            移除劇照
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="flex flex-col items-center py-2 select-none">
+                          <span className="text-3xl filter drop-shadow group-hover:scale-110 transition-transform">📷</span>
+                          <span className="text-xs font-black text-slate-700 mt-1">選取或上傳本機劇照</span>
+                          <span className="text-[10px] text-slate-500 font-bold opacity-80 mt-0.5">Canvas 自動等比壓縮至 300px 節省空間</span>
+                        </div>
+                      )}
+                    </label>
+                  </div>
+                </div>
+
                 {errorMsg && (
                   <motion.p 
                     initial={{ opacity: 0 }}
@@ -701,6 +858,34 @@ export default function App() {
                           </div>
                         )}
 
+                        {/* Series Cover Image Block with LEGO style framing */}
+                        {editingId !== drama.id && (
+                          <div className="w-full h-44 bg-slate-200/95 rounded-xl border-3 border-black overflow-hidden mb-5 relative shadow-[3px_3px_0px_#000000] flex items-center justify-center">
+                            {drama.imageUrl ? (
+                              <img
+                                src={drama.imageUrl}
+                                alt={drama.title}
+                                className="w-full h-full object-cover animate-fade-in"
+                                referrerPolicy="no-referrer"
+                              />
+                            ) : (
+                              <div className="w-full h-full flex flex-col items-center justify-center bg-slate-300/90 text-slate-700 font-bold select-none text-xs gap-1 p-4 text-center">
+                                <span className="text-3xl filter drop-shadow">🎬</span>
+                                <span className="font-black text-[12px] tracking-wider text-slate-800">暫無劇照 Placeholder</span>
+                                <span className="text-[10px] text-slate-600 font-semibold opacity-85">可點選「🔧 修改此積木」上傳劇照喔！</span>
+                              </div>
+                            )}
+                            
+                            {/* Toy Stud Detail */}
+                            <div className="absolute top-2.5 right-2.5 w-5 h-5 bg-black/10 rounded-full border-2 border-black/20 flex items-center justify-center">
+                              <div className="w-2 h-2 bg-black/20" />
+                            </div>
+                            <div className="absolute bottom-2.5 right-2.5 bg-black/75 text-[10px] text-white px-2 py-0.5 rounded font-mono font-bold border border-black/45">
+                              BRICK_PIC
+                            </div>
+                          </div>
+                        )}
+
                         <div className="flex justify-between items-start gap-4">
                           
                           <div className="flex-1">
@@ -749,6 +934,60 @@ export default function App() {
                                     className="w-full px-3 py-2 rounded-lg border-2 border-black text-xs font-bold text-slate-800 bg-white"
                                     id={`edit-note-input-${drama.id}`}
                                   />
+                                </div>
+
+                                <div>
+                                  <label className="block text-[10px] font-black text-slate-600 mb-1 uppercase tracking-wider">劇照 / 封面圖片</label>
+                                  <div className="bg-slate-150 p-2.5 rounded-lg border-2 border-dashed border-slate-300 flex items-center gap-3">
+                                    {editImage ? (
+                                      <div className="relative w-14 h-14 shrink-0 border-2 border-black rounded shadow-[2.5px_2.5px_0_#000000] overflow-hidden">
+                                        <img
+                                          src={editImage}
+                                          alt="Edit Preview"
+                                          className="w-full h-full object-cover"
+                                        />
+                                      </div>
+                                    ) : (
+                                      <div className="w-14 h-14 shrink-0 bg-slate-200 border-2 border-black rounded flex items-center justify-center text-xs font-bold text-slate-400">
+                                        無劇照
+                                      </div>
+                                    )}
+                                    <div className="flex-1 flex flex-wrap gap-2">
+                                      <input
+                                        type="file"
+                                        accept="image/*"
+                                        id={`edit-file-input-${drama.id}`}
+                                        className="hidden"
+                                        onChange={(e) => {
+                                          const file = e.target.files?.[0];
+                                          if (file) {
+                                            compressImage(file)
+                                              .then((base64) => {
+                                                setEditImage(base64);
+                                              })
+                                              .catch((err) => {
+                                                console.error("Editing image compression failed:", err);
+                                              });
+                                          }
+                                        }}
+                                      />
+                                      <label
+                                        htmlFor={`edit-file-input-${drama.id}`}
+                                        className="bg-white hover:bg-slate-50 text-[10px] font-black py-1 px-3 border-2 border-black rounded-md shadow-[1.5px_1.5px_0_#000000] cursor-pointer text-center"
+                                      >
+                                        更換上傳
+                                      </label>
+                                      {editImage && (
+                                        <button
+                                          type="button"
+                                          onClick={() => setEditImage("")}
+                                          className="bg-red-400 hover:bg-red-500 text-black text-[10px] font-black py-1 px-2 border-2 border-black rounded-md shadow-[1.5px_1.5px_0_#000000] cursor-pointer"
+                                        >
+                                          清除劇照
+                                        </button>
+                                      )}
+                                    </div>
+                                  </div>
                                 </div>
                                 <div className="flex gap-2 justify-end pt-1">
                                   <button
@@ -806,9 +1045,13 @@ export default function App() {
                                 </button>
                                 <button
                                   onClick={() => {
-                                    if (window.confirm(`確定要將「${drama.title}」積木回收移除嗎？`)) {
-                                      deleteDrama(drama.id);
-                                    }
+                                    setConfirmModal({
+                                      isOpen: true,
+                                      title: "確定回收此積木嗎？",
+                                      description: `您正在對「${drama.title}」劇集積木進行回收粉碎，此動作將會將該組件拆解打碎並永久從盒中移除。`,
+                                      actionType: "delete",
+                                      targetId: drama.id
+                                    });
                                   }}
                                   className="p-1 px-1.5 text-current hover:text-red-300 hover:bg-black/20 rounded transition-colors cursor-pointer"
                                   id={`btn-delete-${drama.id}`}
@@ -958,9 +1201,12 @@ export default function App() {
           <div className="flex justify-center gap-3 mt-3">
             <button
               onClick={() => {
-                if (window.confirm("確定要把所有追劇積木粉碎倒空嗎？（此資料將會永久遺失）")) {
-                  setDramas([]);
-                }
+                setConfirmModal({
+                  isOpen: true,
+                  title: "🔥 粉碎並倒空全部積木？",
+                  description: "警告：您即將進行全箱毀滅。此操作會將所有的追劇卡片、上傳的壓縮劇照以及集數紀錄全部撕碎打散！此動作不可逆！",
+                  actionType: "clear-all"
+                });
               }}
               className="text-xxs text-red-600 hover:text-red-700 bg-red-50 hover:bg-red-100 border border-red-200 px-3 py-1.5 rounded-md font-bold cursor-pointer transition-colors"
               id="btn-clear-all"
@@ -971,6 +1217,73 @@ export default function App() {
         </footer>
 
       </div>
+
+      {/* Custom LEGO-style dialog confirmation modal */}
+      <AnimatePresence>
+        {confirmModal.isOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/65 backdrop-blur-xs">
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0, y: 30 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.95, opacity: 0, y: 20 }}
+              transition={{ type: "spring", damping: 25, stiffness: 350 }}
+              className="bg-yellow-300 border-[4px] border-black text-black w-full max-w-md rounded-2xl overflow-hidden shadow-[8px_8px_0px_0px_#000000]"
+              id="custom-lego-confirm-modal"
+            >
+              {/* Studs header decoration */}
+              <div className="bg-amber-400 border-b-[3px] border-black p-3.5 flex justify-between items-center">
+                <span className="font-extrabold text-xs tracking-wider uppercase flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-full bg-red-600 border border-black shadow"></span>
+                  Lego Block Security Alert 🚨
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setConfirmModal(prev => ({ ...prev, isOpen: false }))}
+                  className="p-1 hover:bg-black/10 rounded-md border border-transparent hover:border-black/20 cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Content Body */}
+              <div className="p-6">
+                {/* 3D brick warning placeholder */}
+                <div className="flex gap-1.5 mb-4 justify-start">
+                  <div className="w-6 h-6 bg-red-500 border-2 border-black rounded shadow-[2px_2px_0px_#000000] flex items-center justify-center text-xs font-black text-white">⚠️</div>
+                  <div className="w-6 h-6 bg-blue-500 border-2 border-black rounded shadow-[2px_2px_0px_#000000]"></div>
+                  <div className="w-6 h-6 bg-amber-500 border-2 border-black rounded shadow-[2px_2px_0px_#000000]"></div>
+                </div>
+
+                <h3 className="font-black text-lg text-slate-900 leading-tight mb-2">
+                  {confirmModal.title}
+                </h3>
+                <p className="text-xs font-bold text-slate-800 leading-relaxed mb-6">
+                  {confirmModal.description}
+                </p>
+
+                {/* Lego action buttons */}
+                <div className="flex gap-3 justify-end">
+                  <button
+                    type="button"
+                    onClick={() => setConfirmModal(prev => ({ ...prev, isOpen: false }))}
+                    className="px-4 py-2 bg-white hover:bg-slate-50 text-black border-2 border-black rounded-xl font-black text-xs shadow-[2px_2px_0px_#000000] active:translate-y-0.5 active:shadow-none transition-all cursor-pointer"
+                  >
+                    取消
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleConfirmModalAction}
+                    className="px-4.5 py-2 bg-red-500 hover:bg-red-600 text-white border-2 border-black rounded-xl font-black text-xs shadow-[2px_2px_0px_#000000] active:translate-y-0.5 active:shadow-none transition-all cursor-pointer"
+                    id="modal-confirm-btn"
+                  >
+                    確定粉碎
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

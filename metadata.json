@@ -1,0 +1,6 @@
+{
+  "name": "劇集進度追蹤器",
+  "description": "一個精美、貼心的劇集與動漫進度追蹤工具，支援動態進度條與完結提示。",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
